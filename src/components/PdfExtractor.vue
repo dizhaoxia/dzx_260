@@ -68,11 +68,24 @@
               v-model="pageRange"
               type="text"
               class="input"
-              placeholder="例如: 2 或 2-4 或 1,3,5-7"
+              placeholder="例如: 2 或 2-4 或 1,3,5-7；批量导出用分号分隔: 1-3; 5; 8-10"
             />
             <p class="hint">
-              支持单个页码(2)、连续范围(2-4)、多个范围(1,3,5-7)
+              支持单个页码(2)、连续范围(2-4)、多个范围(1,3,5-7)<br/>
+              <strong>批量导出</strong>：用分号分隔多组范围，每组导出为独立PDF
             </p>
+            <div v-if="batchRanges.length > 1" class="batch-preview">
+              <p class="batch-title">📦 将导出 {{ batchRanges.length }} 个文件：</p>
+              <div class="batch-items">
+                <span 
+                  v-for="(range, idx) in batchRanges" 
+                  :key="idx" 
+                  class="badge badge-secondary"
+                >
+                  {{ idx + 1 }}. {{ range.label }} ({{ range.pages.length }}页)
+                </span>
+              </div>
+            </div>
           </div>
 
           <div v-if="selectMode === 'click'" class="setting-item">
@@ -106,6 +119,75 @@
               class="range-input"
             />
             <span class="range-value">{{ thumbnailSize }}px</span>
+          </div>
+
+          <div class="setting-item">
+            <label>自动命名</label>
+            <div class="auto-name-toggle">
+              <label class="switch">
+                <input v-model="autoNamingEnabled" type="checkbox" />
+                <span class="slider"></span>
+              </label>
+              <span class="toggle-label">{{ autoNamingEnabled ? '已启用' : '已禁用' }}</span>
+            </div>
+            <div v-if="autoNamingEnabled" class="naming-patterns">
+              <div class="pattern-group">
+                <label class="pattern-label">选择命名规则：</label>
+                <div class="pattern-options">
+                  <label 
+                    v-for="pattern in namingPatterns" 
+                    :key="pattern.value"
+                    class="pattern-option"
+                  >
+                    <input 
+                      type="radio" 
+                      v-model="selectedNamingPattern" 
+                      :value="pattern.value" 
+                    />
+                    <span class="pattern-text">{{ pattern.label }}</span>
+                    <span class="pattern-example">例如: {{ pattern.example }}</span>
+                  </label>
+                </div>
+              </div>
+              <div v-if="selectedNamingPattern === 'custom'" class="custom-pattern">
+                <label>自定义规则：</label>
+                <input 
+                  v-model="customNamingPattern" 
+                  type="text" 
+                  class="input"
+                  placeholder="{name} = 原文件名, {page} = 起始页, {pages} = 页数, {range} = 页码范围"
+                />
+                <p class="hint">可用变量: {'{'}name{'}'}, {'{'}page{'}'}, {'{'}pages{'}'}, {'{'}range{'}'}</p>
+              </div>
+            </div>
+          </div>
+
+          <div class="setting-item">
+            <label>历史记录</label>
+            <div class="history-section">
+              <div v-if="historyList.length === 0" class="no-history">
+                暂无历史记录
+              </div>
+              <div v-else class="history-list">
+                <div 
+                  v-for="(item, idx) in historyList" 
+                  :key="idx"
+                  class="history-item"
+                  @click="loadFromHistory(item)"
+                >
+                  <span class="history-file">{{ item.fileName }}</span>
+                  <span class="history-range">{{ item.range }}</span>
+                  <span class="history-date">{{ formatDate(item.timestamp) }}</span>
+                </div>
+              </div>
+              <button 
+                v-if="historyList.length > 0"
+                class="btn btn-default btn-small clear-history" 
+                @click.stop="clearHistory"
+              >
+                清空历史
+              </button>
+            </div>
           </div>
 
           <button
@@ -294,19 +376,50 @@ const detailModal = ref({
   pageNum: 1,
   loading: false
 })
+
+const autoNamingEnabled = ref(true)
+const selectedNamingPattern = ref('name_page')
+const customNamingPattern = ref('{name}_第{page}页')
+const historyList = ref([])
+
+const namingPatterns = [
+  { value: 'name_page', label: '原文件名_页码', example: '文档_第2页.pdf' },
+  { value: 'name_range', label: '原文件名_页码范围', example: '文档_第2-5页.pdf' },
+  { value: 'name_pages', label: '原文件名_页数', example: '文档_提取3页.pdf' },
+  { value: 'date', label: '日期_原文件名', example: '20260618_文档.pdf' },
+  { value: 'custom', label: '自定义规则', example: '自定义...' }
+]
+
 const sortedSelectedPages = computed(() => {
  return [...selectedPages.value].sort((a, b) => a - b);
-});
+})
+
+const batchRanges = computed(() => {
+  if (!pdfDocument.value || !pageRange.value) return []
+  const groups = pageRange.value.split(/[;；]/).filter(g => g.trim())
+  const result = []
+  for (const group of groups) {
+    const pages = parsePageRange(group)
+    if (pages.length > 0) {
+      result.push({
+        label: group.trim(),
+        pages: pages.filter(p => p <= pdfDocument.value.pageCount)
+      })
+    }
+  }
+  return result
+})
+
 const canExtract = computed(() => {
  if (!pdfDocument.value)
  return false;
  if (selectMode.value === 'input') {
- return parsePageRange(pageRange.value).length > 0;
+ return batchRanges.value.length > 0 && batchRanges.value.some(r => r.pages.length > 0);
  }
  else {
  return selectedPages.value.length > 0;
  }
-});
+})
 const setCanvasRef = (el, index) => {
  if (el) {
  canvasRefs.value[index] = el;
@@ -319,6 +432,141 @@ const formatFileSize = (bytes) => {
  return (bytes / 1024).toFixed(1) + ' KB';
  return (bytes / (1024 * 1024)).toFixed(2) + ' MB';
 };
+
+const formatDate = (timestamp) => {
+  const d = new Date(timestamp)
+  const now = new Date()
+  const diff = now - d
+  if (diff < 60000) return '刚刚'
+  if (diff < 3600000) return Math.floor(diff / 60000) + '分钟前'
+  if (diff < 86400000) return Math.floor(diff / 3600000) + '小时前'
+  return `${d.getMonth() + 1}/${d.getDate()} ${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`
+}
+
+const generateFileName = (baseName, pages, rangeLabel) => {
+  if (!autoNamingEnabled.value) {
+    return baseName.replace('.pdf', '') + '_提取_' + pages.length + '页.pdf'
+  }
+  
+  const nameWithoutExt = baseName.replace('.pdf', '')
+  const firstPage = pages[0]
+  const lastPage = pages[pages.length - 1]
+  const rangeText = firstPage === lastPage ? `${firstPage}` : `${firstPage}-${lastPage}`
+  const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, '')
+  
+  let pattern = selectedNamingPattern.value
+  if (pattern === 'custom') {
+    pattern = customNamingPattern.value || '{name}_第{page}页'
+  }
+  
+  const templates = {
+    'name_page': '{name}_第{page}页',
+    'name_range': '{name}_第{range}页',
+    'name_pages': '{name}_提取{pages}页',
+    'date': '{date}_{name}'
+  }
+  
+  const template = templates[pattern] || '{name}_第{page}页'
+  
+  let result = template
+    .replace(/{name}/g, nameWithoutExt)
+    .replace(/{page}/g, firstPage)
+    .replace(/{pages}/g, pages.length)
+    .replace(/{range}/g, rangeText)
+    .replace(/{date}/g, dateStr)
+  
+  if (!result.endsWith('.pdf')) {
+    result += '.pdf'
+  }
+  
+  return result
+}
+
+const loadHistory = () => {
+  try {
+    const saved = localStorage.getItem('pdf_extract_history')
+    if (saved) {
+      historyList.value = JSON.parse(saved)
+    }
+  } catch (e) {
+    console.warn('加载历史记录失败', e)
+  }
+}
+
+const saveToHistory = (range) => {
+  if (!pdfDocument.value) return
+  
+  const item = {
+    fileName: pdfDocument.value.fileName,
+    filePath: pdfDocument.value.filePath || '',
+    range: range,
+    timestamp: Date.now()
+  }
+  
+  historyList.value.unshift(item)
+  if (historyList.value.length > 10) {
+    historyList.value = historyList.value.slice(0, 10)
+  }
+  
+  try {
+    localStorage.setItem('pdf_extract_history', JSON.stringify(historyList.value))
+  } catch (e) {
+    console.warn('保存历史记录失败', e)
+  }
+}
+
+const loadFromHistory = async (item) => {
+  if (!item.filePath) {
+    showToast('历史记录不含文件路径，请重新选择文件', 'warning')
+    return
+  }
+  try {
+    await loadPdfFile(item.filePath)
+    pageRange.value = item.range
+    selectMode.value = 'input'
+    showToast('已加载历史记录', 'success')
+  } catch (e) {
+    showToast('加载文件失败: ' + e.message, 'error')
+  }
+}
+
+const clearHistory = () => {
+  historyList.value = []
+  localStorage.removeItem('pdf_extract_history')
+  showToast('已清空历史记录', 'info')
+}
+
+const extractSingleRange = async (pages, fileName) => {
+  const newPdfDoc = await PDFDocument.create();
+  const sourcePdfDoc = pdfDocument.value.pdfDoc;
+  for (const pageNum of pages) {
+    const [copiedPage] = await newPdfDoc.copyPages(sourcePdfDoc, [pageNum - 1]);
+    newPdfDoc.addPage(copiedPage);
+  }
+  const pdfBytes = await newPdfDoc.save();
+  
+  const saveResult = await window.electronAPI.saveFileDialog({
+    defaultPath: fileName
+  });
+  
+  if (saveResult.canceled) {
+    return null;
+  }
+  
+  const writeResult = await window.electronAPI.writeFile(saveResult.filePath, Array.from(pdfBytes));
+  if (!writeResult.success) {
+    showToast('保存文件失败: ' + writeResult.error, 'error');
+    return null;
+  }
+  
+  return {
+    fileName: fileName,
+    pageCount: pages.length,
+    fileSize: pdfBytes.length,
+    filePath: saveResult.filePath,
+    pages: pages
+  };
+}
 const parsePageRange = (input) => {
  if (!input || !input.trim())
  return [];
@@ -381,13 +629,13 @@ const loadPdfFile = async (filePath) => {
  showToast('读取文件失败: ' + result.error, 'error');
  return;
  }
- await loadPdfFromData(new Uint8Array(result.data), result.fileName, result.size);
+ await loadPdfFromData(new Uint8Array(result.data), result.fileName, result.size, filePath);
  }
  catch (error) {
  showToast('加载PDF失败: ' + error.message, 'error');
  }
 };
-const loadPdfFromData = async (data, fileName, fileSize) => {
+const loadPdfFromData = async (data, fileName, fileSize, filePath = '') => {
  try {
  isLoadingThumbnails.value = true;
  const pdfDoc = await PDFDocument.load(data);
@@ -397,7 +645,8 @@ const loadPdfFromData = async (data, fileName, fileSize) => {
  fileName,
  fileSize,
  pageCount,
- pdfDoc
+ pdfDoc,
+ filePath
  };
  selectedPages.value = [];
  extractionResult.value = null;
@@ -557,54 +806,64 @@ const clearPdf = () => {
 const handleExtract = async () => {
  if (!canExtract.value || isExtracting.value)
  return;
- let pagesToExtract;
+
+ let rangesToExtract = [];
+
  if (selectMode.value === 'input') {
- pagesToExtract = parsePageRange(pageRange.value);
  const maxPage = pdfDocument.value.pageCount;
- pagesToExtract = pagesToExtract.filter(p => p <= maxPage);
- if (pagesToExtract.length === 0) {
+ const ranges = batchRanges.value;
+ if (ranges.length === 0) {
  showToast('请输入有效的页码范围', 'warning');
  return;
  }
- if (pagesToExtract.some(p => p > maxPage)) {
- showToast(`页码不能超过 ${maxPage}`, 'warning');
- return;
- }
+ rangesToExtract = ranges.map(r => ({
+   pages: r.pages.filter(p => p <= maxPage),
+   label: r.label
+ })).filter(r => r.pages.length > 0);
  }
  else {
- pagesToExtract = sortedSelectedPages.value;
+ rangesToExtract = [{
+   pages: sortedSelectedPages.value,
+   label: sortedSelectedPages.value.join(',')
+ }];
  }
+
+ if (rangesToExtract.length === 0) {
+ showToast('没有可提取的页面', 'warning');
+ return;
+ }
+
  try {
  isExtracting.value = true;
- const newPdfDoc = await PDFDocument.create();
- const sourcePdfDoc = pdfDocument.value.pdfDoc;
- for (const pageNum of pagesToExtract) {
- const [copiedPage] = await newPdfDoc.copyPages(sourcePdfDoc, [pageNum - 1]);
- newPdfDoc.addPage(copiedPage);
+ const results = [];
+ const isBatch = rangesToExtract.length > 1;
+
+ for (let i = 0; i < rangesToExtract.length; i++) {
+   const range = rangesToExtract[i];
+   const fileName = generateFileName(pdfDocument.value.fileName, range.pages, range.label);
+   const batchInfo = isBatch ? ` [${i + 1}/${rangesToExtract.length}]` : '';
+   
+   showToast(`正在导出${batchInfo}: ${fileName}`, 'info');
+   
+   const result = await extractSingleRange(range.pages, fileName);
+   if (result) {
+     results.push(result);
+   } else {
+     showToast(`已跳过: ${fileName}`, 'info');
+   }
  }
- const pdfBytes = await newPdfDoc.save();
- const defaultName = pdfDocument.value.fileName.replace('.pdf', '') + '_提取_' + pagesToExtract.length + '页.pdf';
- const saveResult = await window.electronAPI.saveFileDialog({
- defaultPath: defaultName
- });
- if (saveResult.canceled) {
- isExtracting.value = false;
- return;
+
+ if (results.length > 0) {
+   saveToHistory(selectMode.value === 'input' ? pageRange.value : rangesToExtract[0].label);
+   extractionResult.value = results[0];
+   
+   if (isBatch) {
+     showToast(`批量导出完成！共生成 ${results.length} 个文件`, 'success');
+   } else {
+     showToast(`成功提取 ${results[0].pageCount} 页`, 'success');
+   }
  }
- const writeResult = await window.electronAPI.writeFile(saveResult.filePath, Array.from(pdfBytes));
- if (!writeResult.success) {
- showToast('保存文件失败: ' + writeResult.error, 'error');
- isExtracting.value = false;
- return;
- }
- extractionResult.value = {
- fileName: defaultName,
- pageCount: pagesToExtract.length,
- fileSize: pdfBytes.length,
- filePath: saveResult.filePath,
- pages: pagesToExtract
- };
- showToast(`成功提取 ${pagesToExtract.length} 页`, 'success');
+
  isExtracting.value = false;
  }
  catch (error) {
@@ -622,6 +881,7 @@ const handleMenuImport = () => {
 };
 onMounted(() => {
  window.addEventListener('menu-import-pdf', handleMenuImport);
+ loadHistory();
 });
 onUnmounted(() => {
  window.removeEventListener('menu-import-pdf', handleMenuImport);
@@ -1180,5 +1440,217 @@ onUnmounted(() => {
   color: var(--text-secondary);
   min-width: 60px;
   text-align: center;
+}
+
+.batch-preview {
+  margin-top: 12px;
+  padding: 12px;
+  background: #f0f7ff;
+  border-radius: 6px;
+  border: 1px solid #d9ecff;
+}
+
+.batch-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--primary-color);
+  margin: 0 0 8px 0;
+}
+
+.batch-items {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.badge.badge-secondary {
+  background: #e6a23c;
+}
+
+.auto-name-toggle {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.toggle-label {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.switch {
+  position: relative;
+  display: inline-block;
+  width: 44px;
+  height: 22px;
+}
+
+.switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: #ccc;
+  transition: 0.3s;
+  border-radius: 22px;
+}
+
+.slider:before {
+  position: absolute;
+  content: "";
+  height: 18px;
+  width: 18px;
+  left: 2px;
+  bottom: 2px;
+  background-color: white;
+  transition: 0.3s;
+  border-radius: 50%;
+}
+
+input:checked + .slider {
+  background-color: var(--primary-color);
+}
+
+input:checked + .slider:before {
+  transform: translateX(22px);
+}
+
+.naming-patterns {
+  padding: 12px;
+  background: var(--bg-color);
+  border-radius: 6px;
+}
+
+.pattern-group {
+  margin-bottom: 12px;
+}
+
+.pattern-label {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+  display: block;
+}
+
+.pattern-options {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.pattern-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: white;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  border: 1px solid transparent;
+}
+
+.pattern-option:hover {
+  border-color: var(--primary-color);
+}
+
+.pattern-option input[type="radio"] {
+  accent-color: var(--primary-color);
+}
+
+.pattern-text {
+  flex: 1;
+  font-size: 13px;
+  color: var(--text-color);
+}
+
+.pattern-example {
+  font-size: 12px;
+  color: var(--text-placeholder);
+  font-family: monospace;
+}
+
+.custom-pattern {
+  margin-top: 8px;
+}
+
+.custom-pattern label {
+  display: block;
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+
+.history-section {
+  position: relative;
+}
+
+.no-history {
+  padding: 16px;
+  text-align: center;
+  color: var(--text-placeholder);
+  font-size: 13px;
+  background: var(--bg-color);
+  border-radius: 6px;
+}
+
+.history-list {
+  max-height: 160px;
+  overflow-y: auto;
+  background: var(--bg-color);
+  border-radius: 6px;
+  padding: 4px;
+}
+
+.history-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+
+.history-item:hover {
+  background: #ecf5ff;
+}
+
+.history-file {
+  flex: 1;
+  font-size: 13px;
+  color: var(--text-color);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.history-range {
+  font-size: 11px;
+  color: var(--primary-color);
+  background: #ecf5ff;
+  padding: 2px 8px;
+  border-radius: 10px;
+  white-space: nowrap;
+}
+
+.history-date {
+  font-size: 11px;
+  color: var(--text-placeholder);
+  white-space: nowrap;
+}
+
+.clear-history {
+  margin-top: 8px;
+  width: 100%;
 }
 </style>

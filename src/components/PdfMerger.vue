@@ -4,10 +4,28 @@
       <div class="left-panel">
         <div class="panel-header">
           <h2>📚 待合并文件</h2>
-          <button class="btn btn-primary" @click="handleImportFiles">
-            <span>📂</span>
-            <span>添加PDF</span>
-          </button>
+          <div class="header-actions">
+            <div class="view-toggle">
+              <button 
+                class="view-btn" 
+                :class="{ active: viewMode === 'file' }"
+                @click="viewMode = 'file'"
+              >
+                📁 文件视图
+              </button>
+              <button 
+                class="view-btn" 
+                :class="{ active: viewMode === 'page' }"
+                @click="viewMode = 'page'"
+              >
+                📄 页面视图
+              </button>
+            </div>
+            <button class="btn btn-primary" @click="handleImportFiles">
+              <span>📂</span>
+              <span>添加PDF</span>
+            </button>
+          </div>
         </div>
 
         <div
@@ -22,9 +40,10 @@
             <p class="empty-text">拖拽多个 PDF 文件到此处</p>
             <p class="empty-hint">或点击上方按钮选择文件</p>
             <p class="empty-support">支持 .pdf 格式文件，可拖拽调整顺序</p>
+            <p class="empty-support">切换到「页面视图」可拖拽单个页面</p>
           </div>
 
-          <div v-else class="merge-list" ref="mergeListRef">
+          <div v-else-if="viewMode === 'file'" class="merge-list" ref="mergeListRef">
             <div
               v-for="(item, index) in mergeList"
               :key="item.id"
@@ -68,6 +87,122 @@
                 title="移除"
               >
                 ✕
+              </button>
+            </div>
+          </div>
+
+          <div v-else class="page-list" ref="pageListRef">
+            <div class="page-list-header">
+              <span class="page-list-title">共 {{ allPages.length }} 个页面</span>
+              <span class="page-list-hint">拖拽页面调整顺序，可跨文件移动</span>
+            </div>
+            <div class="page-grid" ref="pageGridRef">
+              <div
+                v-for="(page, index) in allPages"
+                :key="`${page.fileId}-${page.pageIndex}`"
+                class="page-item"
+                :data-file-id="page.fileId"
+                :data-page-index="page.pageIndex"
+              >
+                <div class="page-item-header">
+                  <span class="page-item-badge">{{ page.fileName }}</span>
+                  <span class="page-item-number">第 {{ page.pageIndex + 1 }} 页</span>
+                </div>
+                <div class="page-item-thumb">
+                  <div v-if="page.loading" class="thumb-loading">
+                    <div class="spinner small"></div>
+                  </div>
+                  <canvas
+                    v-show="!page.loading && page.width > 0"
+                    :ref="el => setPageCanvasRef(el, index)"
+                    :width="page.width"
+                    :height="page.height"
+                  ></canvas>
+                  <div v-show="!page.loading && page.width === 0" class="thumb-placeholder">
+                    📄
+                  </div>
+                </div>
+                <div class="page-item-footer">
+                  <span class="page-item-order">{{ index + 1 }}</span>
+                  <button
+                    class="btn btn-default btn-small"
+                    @click="removePage(index)"
+                    title="移除页面"
+                  >
+                    ✕
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div v-if="mergeList.length > 0" class="merge-settings">
+          <div class="setting-item">
+            <label>自动命名</label>
+            <div class="auto-name-toggle">
+              <label class="switch">
+                <input v-model="autoNamingEnabled" type="checkbox" />
+                <span class="slider"></span>
+              </label>
+              <span class="toggle-label">{{ autoNamingEnabled ? '已启用' : '已禁用' }}</span>
+            </div>
+            <div v-if="autoNamingEnabled" class="naming-patterns">
+              <div class="pattern-group">
+                <label class="pattern-label">选择命名规则：</label>
+                <div class="pattern-options">
+                  <label 
+                    v-for="pattern in namingPatterns" 
+                    :key="pattern.value"
+                    class="pattern-option"
+                  >
+                    <input 
+                      type="radio" 
+                      v-model="selectedNamingPattern" 
+                      :value="pattern.value" 
+                    />
+                    <span class="pattern-text">{{ pattern.label }}</span>
+                    <span class="pattern-example">例如: {{ pattern.example }}</span>
+                  </label>
+                </div>
+              </div>
+              <div v-if="selectedNamingPattern === 'custom'" class="custom-pattern">
+                <label>自定义规则：</label>
+                <input 
+                  v-model="customNamingPattern" 
+                  type="text" 
+                  class="input"
+                  placeholder="{files} = 文件数, {pages} = 页数, {date} = 日期"
+                />
+                <p class="hint">可用变量: {'{'}files{'}'}, {'{'}pages{'}'}, {'{'}date{'}'}</p>
+              </div>
+            </div>
+          </div>
+
+          <div class="setting-item">
+            <label>历史记录</label>
+            <div class="history-section">
+              <div v-if="historyList.length === 0" class="no-history">
+                暂无历史记录
+              </div>
+              <div v-else class="history-list">
+                <div 
+                  v-for="(item, idx) in historyList" 
+                  :key="idx"
+                  class="history-item"
+                  @click="loadFromHistory(item)"
+                >
+                  <span class="history-files">{{ item.fileCount }}个文件</span>
+                  <span class="history-pages">{{ item.pageCount }}页</span>
+                  <span class="history-date">{{ formatDate(item.timestamp) }}</span>
+                </div>
+              </div>
+              <button 
+                v-if="historyList.length > 0"
+                class="btn btn-default btn-small clear-history" 
+                @click.stop="clearHistory"
+              >
+                清空历史
               </button>
             </div>
           </div>
@@ -226,15 +361,50 @@ const selectedFile = ref(null)
 const selectedFilePages = ref([])
 const mergeResult = ref(null)
 const mergeListRef = ref(null)
+const pageListRef = ref(null)
+const pageGridRef = ref(null)
 const previewContainer = ref(null)
 const thumbnailRefs = ref([])
+const pageCanvasRefs = ref([])
 const previewCanvasRefs = ref([])
 
+const viewMode = ref('file')
+const autoNamingEnabled = ref(true)
+const selectedNamingPattern = ref('files_pages')
+const customNamingPattern = ref('合并文件_{files}个_{pages}页')
+const historyList = ref([])
+
+const namingPatterns = [
+  { value: 'files_pages', label: '文件数_页数', example: '合并文件_3个_10页.pdf' },
+  { value: 'date_files', label: '日期_文件数', example: '20260618_合并_3个文件.pdf' },
+  { value: 'simple', label: '简洁命名', example: '合并文档.pdf' },
+  { value: 'custom', label: '自定义规则', example: '自定义...' }
+]
+
 let sortable = null
+let pageSortable = null
 let fileIdCounter = 0
 
 const totalPages = computed(() => {
   return mergeList.value.reduce((sum, item) => sum + item.pageCount, 0)
+})
+
+const allPages = computed(() => {
+  const pages = []
+  mergeList.value.forEach((fileItem, fileIdx) => {
+    for (let i = 0; i < fileItem.pageCount; i++) {
+      pages.push({
+        fileId: fileItem.id,
+        fileIndex: fileIdx,
+        pageIndex: i,
+        fileName: fileItem.fileName,
+        loading: !fileItem.pageThumbnails || !fileItem.pageThumbnails[i],
+        width: fileItem.pageThumbnails && fileItem.pageThumbnails[i] ? fileItem.pageThumbnails[i].width : 0,
+        height: fileItem.pageThumbnails && fileItem.pageThumbnails[i] ? fileItem.pageThumbnails[i].height : 0
+      })
+    }
+  })
+  return pages
 })
 
 const formatFileSize = (bytes) => {
@@ -243,9 +413,127 @@ const formatFileSize = (bytes) => {
   return (bytes / (1024 * 1024)).toFixed(2) + ' MB'
 }
 
+const formatDate = (timestamp) => {
+  const d = new Date(timestamp)
+  const now = new Date()
+  const diff = now - d
+  if (diff < 60000) return '刚刚'
+  if (diff < 3600000) return Math.floor(diff / 60000) + '分钟前'
+  if (diff < 86400000) return Math.floor(diff / 3600000) + '小时前'
+  return `${d.getMonth() + 1}/${d.getDate()} ${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`
+}
+
+const generateFileName = () => {
+  if (!autoNamingEnabled.value) {
+    return '合并文件_' + mergeList.value.length + '个_' + totalPages.value + '页.pdf'
+  }
+  
+  const fileCount = mergeList.value.length
+  const pageCount = totalPages.value
+  const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, '')
+  
+  let pattern = selectedNamingPattern.value
+  if (pattern === 'custom') {
+    pattern = customNamingPattern.value || '合并文件_{files}个_{pages}页'
+  }
+  
+  const templates = {
+    'files_pages': '合并文件_{files}个_{pages}页',
+    'date_files': '{date}_合并_{files}个文件',
+    'simple': '合并文档'
+  }
+  
+  const template = templates[pattern] || '合并文件_{files}个_{pages}页'
+  
+  let result = template
+    .replace(/{files}/g, fileCount)
+    .replace(/{pages}/g, pageCount)
+    .replace(/{date}/g, dateStr)
+  
+  if (!result.endsWith('.pdf')) {
+    result += '.pdf'
+  }
+  
+  return result
+}
+
+const loadHistory = () => {
+  try {
+    const saved = localStorage.getItem('pdf_merge_history')
+    if (saved) {
+      historyList.value = JSON.parse(saved)
+    }
+  } catch (e) {
+    console.warn('加载历史记录失败', e)
+  }
+}
+
+const saveToHistory = () => {
+  const item = {
+    fileCount: mergeList.value.length,
+    pageCount: totalPages.value,
+    files: mergeList.value.map(f => ({ fileName: f.fileName, filePath: f.filePath || '' })),
+    timestamp: Date.now()
+  }
+  
+  historyList.value.unshift(item)
+  if (historyList.value.length > 10) {
+    historyList.value = historyList.value.slice(0, 10)
+  }
+  
+  try {
+    localStorage.setItem('pdf_merge_history', JSON.stringify(historyList.value))
+  } catch (e) {
+    console.warn('保存历史记录失败', e)
+  }
+}
+
+const loadFromHistory = async (item) => {
+  if (!item.files || item.files.length === 0) {
+    showToast('历史记录不含文件路径', 'warning')
+    return
+  }
+  
+  const validPaths = item.files.filter(f => f.filePath)
+  if (validPaths.length === 0) {
+    showToast('历史记录不含文件路径，请重新选择文件', 'warning')
+    return
+  }
+  
+  clearAll()
+  
+  let loadedCount = 0
+  for (const file of validPaths) {
+    try {
+      await addFile(file.filePath)
+      loadedCount++
+    } catch (e) {
+      console.warn('加载历史文件失败:', file.fileName)
+    }
+  }
+  
+  if (loadedCount > 0) {
+    showToast(`已加载 ${loadedCount}/${validPaths.length} 个文件`, 'success')
+  } else {
+    showToast('未能加载任何文件', 'error')
+  }
+}
+
+const clearHistory = () => {
+  historyList.value = []
+  localStorage.removeItem('pdf_merge_history')
+  showToast('已清空历史记录', 'info')
+}
+
 const setThumbnailRef = (el, index) => {
   if (el) {
     thumbnailRefs.value[index] = el
+  }
+}
+
+const setPageCanvasRef = (el, index) => {
+  if (el) {
+    pageCanvasRefs.value[index] = el
   }
 }
 
@@ -293,13 +581,13 @@ const addFile = async (filePath) => {
       showToast('读取文件失败: ' + result.error, 'error')
       return
     }
-    await addFileFromData(new Uint8Array(result.data), result.fileName, result.size)
+    await addFileFromData(new Uint8Array(result.data), result.fileName, result.size, filePath)
   } catch (error) {
     showToast('加载PDF失败: ' + error.message, 'error')
   }
 }
 
-const addFileFromData = async (data, fileName, fileSize) => {
+const addFileFromData = async (data, fileName, fileSize, filePath = '') => {
   try {
     const pdfDoc = await PDFDocument.load(data)
     const pageCount = pdfDoc.getPageCount()
@@ -314,7 +602,9 @@ const addFileFromData = async (data, fileName, fileSize) => {
       pdfjsDoc: null,
       thumbWidth: 0,
       thumbHeight: 0,
-      thumbnailLoading: true
+      thumbnailLoading: true,
+      pageThumbnails: [],
+      filePath
     }
 
     mergeList.value.push(fileItem)
@@ -337,10 +627,74 @@ const addFileFromData = async (data, fileName, fileSize) => {
       fileItem.thumbHeight = 0
     }
 
+    loadAllPageThumbnails(fileItem)
+
     showToast(`已添加 ${fileName} (${pageCount}页)`, 'success')
   } catch (error) {
     showToast('解析PDF失败: ' + error.message, 'error')
   }
+}
+
+const loadAllPageThumbnails = async (fileItem) => {
+  try {
+    if (!fileItem.pdfjsDoc) {
+      fileItem.pdfjsDoc = await getPdfLib().getDocument({ data: fileItem.data }).promise
+    }
+
+    const pageCount = fileItem.pageCount
+    fileItem.pageThumbnails = []
+    for (let i = 0; i < pageCount; i++) {
+      fileItem.pageThumbnails.push({ loading: true, width: 0, height: 0 })
+    }
+
+    for (let i = 0; i < pageCount; i++) {
+      try {
+        const page = await fileItem.pdfjsDoc.getPage(i + 1)
+        const viewport = page.getViewport({ scale: 1 })
+        const scale = 100 / viewport.width
+        const scaledViewport = page.getViewport({ scale })
+
+        fileItem.pageThumbnails[i] = {
+          loading: false,
+          width: scaledViewport.width,
+          height: scaledViewport.height
+        }
+      } catch (e) {
+        fileItem.pageThumbnails[i] = {
+          loading: false,
+          width: 100,
+          height: 140
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('加载页面缩略图失败:', e)
+  }
+}
+
+const removePage = (globalIndex) => {
+  const page = allPages.value[globalIndex]
+  if (!page) return
+
+  const fileItem = mergeList.value[page.fileIndex]
+  if (!fileItem) return
+
+  const pages = fileItem.pdfDoc.getPages()
+  fileItem.pdfDoc.removePage(page.pageIndex)
+  fileItem.pageCount--
+
+  if (fileItem.pageCount === 0) {
+    removeFile(page.fileIndex)
+  } else {
+    fileItem.pageThumbnails.splice(page.pageIndex, 1)
+    if (fileItem.pdfjsDoc) {
+      fileItem.pdfjsDoc.destroy()
+      fileItem.pdfjsDoc = null
+    }
+    loadAllPageThumbnails(fileItem)
+  }
+
+  showToast(`已移除 ${fileItem.fileName} 第 ${page.pageIndex + 1} 页`, 'info')
 }
 
 const loadFileThumbnail = async (fileItem, index) => {
@@ -478,6 +832,37 @@ const renderPreviewPage = async (pdfjsDoc, pageIndex) => {
   }
 }
 
+const renderPageThumbnails = async () => {
+  await nextTick()
+  
+  for (let i = 0; i < allPages.value.length; i++) {
+    const page = allPages.value[i]
+    const fileItem = mergeList.value.find(f => f.id === page.fileId)
+    if (!fileItem || !fileItem.pdfjsDoc) continue
+
+    try {
+      const pdfPage = await fileItem.pdfjsDoc.getPage(page.pageIndex + 1)
+      const viewport = pdfPage.getViewport({ scale: 1 })
+      const scale = 100 / viewport.width
+      const scaledViewport = pdfPage.getViewport({ scale })
+
+      await nextTick()
+      const canvas = pageCanvasRefs.value[i]
+      if (canvas) {
+        const context = canvas.getContext('2d')
+        canvas.width = scaledViewport.width
+        canvas.height = scaledViewport.height
+        await pdfPage.render({
+          canvasContext: context,
+          viewport: scaledViewport
+        }).promise
+      }
+    } catch (e) {
+      console.warn('渲染页面缩略图失败:', e)
+    }
+  }
+}
+
 const initSortable = () => {
   if (!mergeListRef.value || sortable) return
 
@@ -500,9 +885,78 @@ const initSortable = () => {
   })
 }
 
+const initPageSortable = () => {
+  if (!pageGridRef.value || pageSortable) return
+
+  pageSortable = new Sortable(pageGridRef.value, {
+    animation: 200,
+    ghostClass: 'sortable-ghost',
+    chosenClass: 'sortable-chosen',
+    dragClass: 'sortable-drag',
+    onEnd: async (evt) => {
+      const { oldIndex, newIndex } = evt
+      if (oldIndex === newIndex) return
+
+      const pageToMove = allPages.value[oldIndex]
+      const targetPage = allPages.value[newIndex]
+      
+      const sourceFile = mergeList.value.find(f => f.id === pageToMove.fileId)
+      const targetFile = mergeList.value.find(f => f.id === targetPage.fileId)
+      
+      if (!sourceFile || !targetFile) return
+
+      try {
+        const [copiedPage] = await targetFile.pdfDoc.copyPages(sourceFile.pdfDoc, [pageToMove.pageIndex])
+        
+        let insertIndex = targetPage.pageIndex
+        if (oldIndex > newIndex) {
+          insertIndex = targetPage.pageIndex
+        } else {
+          insertIndex = targetPage.pageIndex + 1
+        }
+        
+        targetFile.pdfDoc.insertPage(insertIndex, copiedPage)
+        targetFile.pageCount++
+        
+        sourceFile.pdfDoc.removePage(pageToMove.pageIndex)
+        sourceFile.pageCount--
+        
+        if (sourceFile.pageCount === 0) {
+          const sourceIndex = mergeList.value.findIndex(f => f.id === sourceFile.id)
+          if (sourceIndex > -1) {
+            removeFile(sourceIndex)
+          }
+        } else {
+          sourceFile.pageThumbnails.splice(pageToMove.pageIndex, 1)
+          if (sourceFile.pdfjsDoc) {
+            sourceFile.pdfjsDoc.destroy()
+            sourceFile.pdfjsDoc = null
+          }
+          loadAllPageThumbnails(sourceFile)
+        }
+        
+        targetFile.pageThumbnails.splice(insertIndex, 0, { loading: false, width: 100, height: 140 })
+        if (targetFile.pdfjsDoc) {
+          targetFile.pdfjsDoc.destroy()
+          targetFile.pdfjsDoc = null
+        }
+        loadAllPageThumbnails(targetFile)
+        
+        await nextTick()
+        setTimeout(() => renderPageThumbnails(), 100)
+        
+        showToast(`已移动 ${sourceFile.fileName} 第 ${pageToMove.pageIndex + 1} 页到 ${targetFile.fileName}`, 'success')
+      } catch (e) {
+        showToast('移动页面失败: ' + e.message, 'error')
+        console.error(e)
+      }
+    }
+  })
+}
+
 const handleMerge = async () => {
-  if (mergeList.value.length < 2) {
-    showToast('至少需要2个文件才能合并', 'warning')
+  if (allPages.value.length < 2) {
+    showToast('至少需要2个页面才能合并', 'warning')
     return
   }
 
@@ -511,19 +965,17 @@ const handleMerge = async () => {
 
     const mergedPdf = await PDFDocument.create()
 
-    for (const fileItem of mergeList.value) {
-      const sourcePdf = fileItem.pdfDoc
-      const pageCount = sourcePdf.getPageCount()
+    for (const page of allPages.value) {
+      const fileItem = mergeList.value.find(f => f.id === page.fileId)
+      if (!fileItem) continue
       
-      for (let i = 0; i < pageCount; i++) {
-        const [copiedPage] = await mergedPdf.copyPages(sourcePdf, [i])
-        mergedPdf.addPage(copiedPage)
-      }
+      const [copiedPage] = await mergedPdf.copyPages(fileItem.pdfDoc, [page.pageIndex])
+      mergedPdf.addPage(copiedPage)
     }
 
     const pdfBytes = await mergedPdf.save()
 
-    const defaultName = '合并文件_' + mergeList.value.length + '个_' + totalPages.value + '页.pdf'
+    const defaultName = generateFileName()
     const saveResult = await window.electronAPI.saveFileDialog({
       defaultPath: defaultName
     })
@@ -544,19 +996,22 @@ const handleMerge = async () => {
       return
     }
 
+    saveToHistory()
+
     mergeResult.value = {
       fileName: defaultName,
       fileCount: mergeList.value.length,
-      pageCount: totalPages.value,
+      pageCount: allPages.value.length,
       fileSize: pdfBytes.length,
       filePath: saveResult.filePath
     }
 
-    showToast(`合并成功！共 ${totalPages.value} 页`, 'success')
+    showToast(`合并成功！共 ${allPages.value.length} 页`, 'success')
     isMerging.value = false
   } catch (error) {
     isMerging.value = false
     showToast('合并失败: ' + error.message, 'error')
+    console.error(error)
   }
 }
 
@@ -571,15 +1026,45 @@ const handleMenuImport = () => {
 }
 
 watch(mergeListRef, (newVal) => {
-  if (newVal) {
+  if (newVal && viewMode.value === 'file') {
     nextTick(() => {
       initSortable()
     })
   }
 }, { immediate: true })
 
+watch(pageGridRef, (newVal) => {
+  if (newVal && viewMode.value === 'page') {
+    nextTick(() => {
+      initPageSortable()
+      renderPageThumbnails()
+    })
+  }
+}, { immediate: true })
+
+watch(viewMode, (newMode) => {
+  if (sortable) {
+    sortable.destroy()
+    sortable = null
+  }
+  if (pageSortable) {
+    pageSortable.destroy()
+    pageSortable = null
+  }
+  
+  nextTick(() => {
+    if (newMode === 'file' && mergeListRef.value) {
+      initSortable()
+    } else if (newMode === 'page' && pageGridRef.value) {
+      initPageSortable()
+      renderPageThumbnails()
+    }
+  })
+})
+
 onMounted(() => {
   window.addEventListener('menu-import-merge', handleMenuImport)
+  loadHistory()
   nextTick(() => {
     initSortable()
   })
@@ -602,6 +1087,9 @@ onUnmounted(() => {
   window.removeEventListener('menu-import-merge', handleMenuImport)
   if (sortable) {
     sortable.destroy()
+  }
+  if (pageSortable) {
+    pageSortable.destroy()
   }
   mergeList.value.forEach(item => {
     if (item.pdfjsDoc) {
@@ -1069,5 +1557,358 @@ onUnmounted(() => {
 .result-actions {
   display: flex;
   gap: 12px;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.view-toggle {
+  display: flex;
+  background: var(--bg-color);
+  border-radius: 6px;
+  padding: 2px;
+}
+
+.view-btn {
+  padding: 6px 12px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 13px;
+  border-radius: 4px;
+  transition: all 0.2s ease;
+}
+
+.view-btn:hover {
+  color: var(--primary-color);
+}
+
+.view-btn.active {
+  background: var(--primary-color);
+  color: white;
+}
+
+.page-list {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.page-list-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 12px;
+  background: var(--bg-color);
+  border-radius: 6px;
+}
+
+.page-list-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-color);
+}
+
+.page-list-hint {
+  font-size: 11px;
+  color: var(--text-placeholder);
+}
+
+.page-grid {
+  flex: 1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  overflow-y: auto;
+  padding: 8px;
+  align-content: flex-start;
+}
+
+.page-item {
+  width: 120px;
+  background: white;
+  border: 2px solid var(--border-color);
+  border-radius: 8px;
+  overflow: hidden;
+  transition: all 0.2s ease;
+  cursor: grab;
+}
+
+.page-item:hover {
+  border-color: var(--primary-color);
+  box-shadow: var(--shadow-hover);
+}
+
+.page-item:active {
+  cursor: grabbing;
+}
+
+.page-item-header {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px;
+  background: var(--bg-color);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.page-item-badge {
+  font-size: 10px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.page-item-number {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--primary-color);
+}
+
+.page-item-thumb {
+  width: 100%;
+  aspect-ratio: 1 / 1.4;
+  background: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px;
+}
+
+.page-item-thumb canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  border-radius: 2px;
+}
+
+.page-item-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 4px 8px;
+  border-top: 1px solid var(--border-color);
+}
+
+.page-item-order {
+  font-size: 10px;
+  color: var(--text-placeholder);
+  font-weight: 600;
+}
+
+.merge-settings {
+  background: white;
+  border-radius: 8px;
+  padding: 16px;
+  box-shadow: var(--shadow);
+}
+
+.merge-settings .setting-item {
+  margin-bottom: 16px;
+}
+
+.merge-settings .setting-item:last-child {
+  margin-bottom: 0;
+}
+
+.merge-settings .setting-item label {
+  display: block;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+}
+
+.auto-name-toggle {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.toggle-label {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.switch {
+  position: relative;
+  display: inline-block;
+  width: 44px;
+  height: 22px;
+}
+
+.switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: #ccc;
+  transition: 0.3s;
+  border-radius: 22px;
+}
+
+.slider:before {
+  position: absolute;
+  content: "";
+  height: 18px;
+  width: 18px;
+  left: 2px;
+  bottom: 2px;
+  background-color: white;
+  transition: 0.3s;
+  border-radius: 50%;
+}
+
+input:checked + .slider {
+  background-color: var(--primary-color);
+}
+
+input:checked + .slider:before {
+  transform: translateX(22px);
+}
+
+.naming-patterns {
+  padding: 12px;
+  background: var(--bg-color);
+  border-radius: 6px;
+}
+
+.pattern-group {
+  margin-bottom: 12px;
+}
+
+.pattern-label {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+  display: block;
+}
+
+.pattern-options {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.pattern-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: white;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  border: 1px solid transparent;
+}
+
+.pattern-option:hover {
+  border-color: var(--primary-color);
+}
+
+.pattern-option input[type="radio"] {
+  accent-color: var(--primary-color);
+}
+
+.pattern-text {
+  flex: 1;
+  font-size: 13px;
+  color: var(--text-color);
+}
+
+.pattern-example {
+  font-size: 12px;
+  color: var(--text-placeholder);
+  font-family: monospace;
+}
+
+.custom-pattern {
+  margin-top: 8px;
+}
+
+.custom-pattern label {
+  display: block;
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+
+.history-section {
+  position: relative;
+}
+
+.no-history {
+  padding: 16px;
+  text-align: center;
+  color: var(--text-placeholder);
+  font-size: 13px;
+  background: var(--bg-color);
+  border-radius: 6px;
+}
+
+.history-list {
+  max-height: 160px;
+  overflow-y: auto;
+  background: var(--bg-color);
+  border-radius: 6px;
+  padding: 4px;
+}
+
+.history-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+
+.history-item:hover {
+  background: #ecf5ff;
+}
+
+.history-files {
+  flex: 1;
+  font-size: 13px;
+  color: var(--text-color);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.history-pages {
+  font-size: 11px;
+  color: var(--primary-color);
+  background: #ecf5ff;
+  padding: 2px 8px;
+  border-radius: 10px;
+  white-space: nowrap;
+}
+
+.history-date {
+  font-size: 11px;
+  color: var(--text-placeholder);
+  white-space: nowrap;
+}
+
+.clear-history {
+  margin-top: 8px;
+  width: 100%;
 }
 </style>
