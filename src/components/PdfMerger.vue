@@ -2,39 +2,42 @@
   <div class="merger-container">
     <div class="content-wrapper">
       <div class="left-panel">
-        <div class="panel-header">
-          <h2>📚 待合并文件</h2>
-          <div class="header-actions">
-            <div class="view-toggle">
-              <button 
-                class="view-btn" 
-                :class="{ active: viewMode === 'file' }"
-                @click="viewMode = 'file'"
-              >
-                📁 文件视图
-              </button>
-              <button 
-                class="view-btn" 
-                :class="{ active: viewMode === 'page' }"
-                @click="viewMode = 'page'"
-              >
-                📄 页面视图
+        <div class="left-panel-header">
+          <div class="panel-header">
+            <h2>📚 待合并文件</h2>
+            <div class="header-actions">
+              <div class="view-toggle">
+                <button 
+                  class="view-btn" 
+                  :class="{ active: viewMode === 'file' }"
+                  @click="viewMode = 'file'"
+                >
+                  📁 文件视图
+                </button>
+                <button 
+                  class="view-btn" 
+                  :class="{ active: viewMode === 'page' }"
+                  @click="viewMode = 'page'"
+                >
+                  📄 页面视图
+                </button>
+              </div>
+              <button class="btn btn-primary" @click="handleImportFiles">
+                <span>📂</span>
+                <span>添加PDF</span>
               </button>
             </div>
-            <button class="btn btn-primary" @click="handleImportFiles">
-              <span>📂</span>
-              <span>添加PDF</span>
-            </button>
           </div>
         </div>
 
-        <div
-          class="drop-zone"
-          :class="{ 'drag-over': isDragOver }"
-          @dragover.prevent="isDragOver = true"
-          @dragleave="isDragOver = false"
-          @drop.prevent="handleDrop"
-        >
+        <div class="left-panel-scroll" @click="handleLeftPanelClick">
+          <div
+            class="drop-zone"
+            :class="{ 'drag-over': isDragOver }"
+            @dragover.prevent="isDragOver = true"
+            @dragleave="isDragOver = false"
+            @drop.prevent="handleDrop"
+          >
           <div v-if="mergeList.length === 0" class="empty-state">
             <div class="empty-icon">📎</div>
             <p class="empty-text">拖拽多个 PDF 文件到此处</p>
@@ -233,6 +236,7 @@
               <span>{{ isMerging ? '合并中...' : '开始合并' }}</span>
             </button>
           </div>
+        </div>
         </div>
       </div>
 
@@ -1062,25 +1066,33 @@ watch(viewMode, (newMode) => {
   })
 })
 
+const handleLeftPanelClick = (e) => {
+  const itemEl = e.target.closest('.merge-item')
+  if (itemEl && !e.target.closest('.btn-remove') && !e.target.closest('.item-drag-handle')) {
+    const id = parseInt(itemEl.dataset.id)
+    const item = mergeList.value.find(f => f.id === id)
+    if (item) {
+      selectFile(item)
+      return
+    }
+  }
+  
+  const pageItemEl = e.target.closest('.page-item')
+  if (pageItemEl && !e.target.closest('button')) {
+    const fileId = parseInt(pageItemEl.dataset.fileId)
+    const item = mergeList.value.find(f => f.id === fileId)
+    if (item) {
+      selectFile(item)
+    }
+  }
+}
+
 onMounted(() => {
   window.addEventListener('menu-import-merge', handleMenuImport)
   loadHistory()
   nextTick(() => {
     initSortable()
   })
-
-  if (mergeListRef.value) {
-    mergeListRef.value.addEventListener('click', (e) => {
-      const itemEl = e.target.closest('.merge-item')
-      if (itemEl && !e.target.closest('.btn-remove') && !e.target.closest('.item-drag-handle')) {
-        const id = parseInt(itemEl.dataset.id)
-        const item = mergeList.value.find(f => f.id === id)
-        if (item) {
-          selectFile(item)
-        }
-      }
-    })
-  }
 })
 
 onUnmounted(() => {
@@ -1119,6 +1131,26 @@ onUnmounted(() => {
 .left-panel {
   width: 480px;
   flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: white;
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+}
+
+.left-panel-header {
+  flex-shrink: 0;
+  padding: 16px 16px 12px 16px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.left-panel-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
   display: flex;
   flex-direction: column;
   gap: 16px;
@@ -1435,9 +1467,14 @@ onUnmounted(() => {
   background: white;
 }
 
+.preview-thumbnail-item {
+  width: 150px;
+}
+
 .preview-thumbnail-item canvas {
   display: block;
-  width: 150px;
+  width: 100%;
+  height: auto;
 }
 
 .preview-page-number {

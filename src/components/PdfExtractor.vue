@@ -2,16 +2,19 @@
   <div class="extractor-container">
     <div class="content-wrapper">
       <div class="left-panel">
-        <div class="panel-header">
-          <h2>📁 PDF文件</h2>
-          <button class="btn btn-primary" @click="handleImportPdf">
-            <span>📂</span>
-            <span>导入PDF</span>
-          </button>
+        <div class="left-panel-header">
+          <div class="panel-header">
+            <h2>📁 PDF文件</h2>
+            <button class="btn btn-primary" @click="handleImportPdf">
+              <span>📂</span>
+              <span>导入PDF</span>
+            </button>
+          </div>
         </div>
 
-        <div
-          class="drop-zone"
+        <div class="left-panel-scroll">
+          <div
+            class="drop-zone"
           :class="{ 'drag-over': isDragOver }"
           @dragover.prevent="isDragOver = true"
           @dragleave="isDragOver = false"
@@ -200,6 +203,7 @@
             <span>{{ isExtracting ? '提取中...' : '提取页面' }}</span>
           </button>
         </div>
+        </div>
       </div>
 
       <div class="right-panel">
@@ -306,11 +310,11 @@
           </button>
         </div>
         <div class="detail-modal-body">
-          <div v-if="detailModal.loading" class="detail-loading">
+          <div v-show="detailModal.loading" class="detail-loading">
             <div class="spinner large"></div>
             <p>正在加载页面...</p>
           </div>
-          <div v-else class="detail-canvas-container">
+          <div v-show="!detailModal.loading" class="detail-canvas-container">
             <canvas ref="detailCanvas"></canvas>
           </div>
         </div>
@@ -682,6 +686,12 @@ const renderThumbnail = async (pageIndex) => {
     const width = scaledViewport.width
     const height = scaledViewport.height
 
+    thumbnails.value[pageIndex] = {
+      loading: false,
+      width,
+      height
+    }
+
     await nextTick()
     const canvas = canvasRefs.value[pageIndex]
     
@@ -694,12 +704,6 @@ const renderThumbnail = async (pageIndex) => {
         canvasContext: context,
         viewport: scaledViewport
       }).promise
-    }
-
-    thumbnails.value[pageIndex] = {
-      loading: false,
-      width,
-      height
     }
   } catch (error) {
     console.error('渲染缩略图失败:', error)
@@ -741,10 +745,26 @@ const closeDetailModal = () => {
 }
 
 const renderDetailPage = async (pageNum) => {
-  if (!pdfjsDoc.value || !detailCanvas.value) return
+  if (!pdfjsDoc.value) return
   
   try {
     detailModal.value.loading = true
+    
+    await nextTick()
+    let canvas = detailCanvas.value
+    let tries = 0
+    while (!canvas && tries < 10) {
+      await new Promise(r => setTimeout(r, 50))
+      canvas = detailCanvas.value
+      tries++
+    }
+    
+    if (!canvas) {
+      console.warn('详情canvas未就绪')
+      detailModal.value.loading = false
+      return
+    }
+    
     const page = await pdfjsDoc.value.getPage(pageNum)
     const viewport = page.getViewport({ scale: 1 })
     
@@ -752,7 +772,6 @@ const renderDetailPage = async (pageNum) => {
     const scale = containerWidth / viewport.width
     const scaledViewport = page.getViewport({ scale })
     
-    const canvas = detailCanvas.value
     const context = canvas.getContext('2d')
     canvas.width = scaledViewport.width
     canvas.height = scaledViewport.height
@@ -913,8 +932,28 @@ onUnmounted(() => {
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: white;
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+}
+
+.left-panel-header {
+  flex-shrink: 0;
+  padding: 16px 16px 12px 16px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.left-panel-scroll {
+  flex: 1;
   overflow-y: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-height: 0;
 }
 
 .right-panel {
