@@ -38,12 +38,12 @@
                   <div class="spinner small"></div>
                 </div>
                 <canvas
-                  v-else-if="item.thumbnail"
+                  v-show="!item.thumbnailLoading && item.thumbWidth > 0"
                   :ref="el => setThumbnailRef(el, index)"
                   :width="item.thumbWidth"
                   :height="item.thumbHeight"
                 ></canvas>
-                <div v-else class="thumb-placeholder">
+                <div v-show="!item.thumbnailLoading && item.thumbWidth === 0" class="thumb-placeholder">
                   📄
                 </div>
               </div>
@@ -312,16 +312,30 @@ const addFileFromData = async (data, fileName, fileSize) => {
       pageCount,
       pdfDoc,
       pdfjsDoc: null,
-      thumbnail: null,
-      thumbnailLoading: true,
       thumbWidth: 0,
-      thumbHeight: 0
+      thumbHeight: 0,
+      thumbnailLoading: true
     }
 
     mergeList.value.push(fileItem)
+    const currentIndex = mergeList.value.length - 1
 
-    await nextTick()
-    await loadFileThumbnail(fileItem, mergeList.value.length - 1)
+    const timeoutPromise = new Promise((_, reject) => {
+      setTimeout(() => reject(new Error('缩略图加载超时')), 10000)
+    })
+
+    try {
+      await nextTick()
+      await Promise.race([
+        loadFileThumbnail(fileItem, currentIndex),
+        timeoutPromise
+      ])
+    } catch (thumbError) {
+      console.warn('缩略图加载失败，文件仍可合并:', thumbError.message)
+      fileItem.thumbnailLoading = false
+      fileItem.thumbWidth = 0
+      fileItem.thumbHeight = 0
+    }
 
     showToast(`已添加 ${fileName} (${pageCount}页)`, 'success')
   } catch (error) {
@@ -339,27 +353,32 @@ const loadFileThumbnail = async (fileItem, index) => {
     const scale = 80 / viewport.width
     const scaledViewport = page.getViewport({ scale })
 
-    fileItem.thumbWidth = scaledViewport.width
-    fileItem.thumbHeight = scaledViewport.height
-    fileItem.thumbnail = true
+    const width = scaledViewport.width
+    const height = scaledViewport.height
 
     await nextTick()
-
     const canvas = thumbnailRefs.value[index]
+    
     if (canvas) {
       const context = canvas.getContext('2d')
-      canvas.width = scaledViewport.width
-      canvas.height = scaledViewport.height
+      canvas.width = width
+      canvas.height = height
+      
       await page.render({
         canvasContext: context,
         viewport: scaledViewport
       }).promise
     }
 
+    fileItem.thumbWidth = width
+    fileItem.thumbHeight = height
     fileItem.thumbnailLoading = false
   } catch (error) {
     console.error('加载缩略图失败:', error)
     fileItem.thumbnailLoading = false
+    fileItem.thumbWidth = 0
+    fileItem.thumbHeight = 0
+    throw error
   }
 }
 

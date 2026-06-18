@@ -143,22 +143,26 @@
                 selected: selectedPages.includes(index + 1),
                 loading: page.loading
               }"
-              @click="togglePageSelection(index + 1)"
+              @click="handleThumbnailClick(index + 1)"
+              @dblclick="openDetailModal(index + 1)"
               :style="{ width: thumbnailSize + 'px' }"
             >
               <div v-if="page.loading" class="thumbnail-loading">
                 <div class="spinner"></div>
               </div>
               <canvas
-                v-else
+                v-show="!page.loading && page.width > 0"
                 :ref="el => setCanvasRef(el, index)"
                 :width="page.width"
                 :height="page.height"
                 :style="{
                   width: thumbnailSize + 'px',
-                  height: (thumbnailSize * page.height / page.width) + 'px'
+                  height: (page.width > 0 ? (thumbnailSize * page.height / page.width) + 'px' : (thumbnailSize * 1.4) + 'px')
                 }"
               ></canvas>
+              <div v-show="!page.loading && page.width === 0" class="thumbnail-placeholder">
+                📄
+              </div>
               <div class="page-number">
                 <span class="page-badge">{{ index + 1 }}</span>
                 <span v-if="selectedPages.includes(index + 1)" class="check-icon">✓</span>
@@ -210,6 +214,44 @@
         </div>
       </div>
     </div>
+
+    <div v-if="detailModal.show" class="detail-modal" @click.self="closeDetailModal">
+      <div class="detail-modal-content">
+        <div class="detail-modal-header">
+          <h3>📄 页面详情 - 第 {{ detailModal.pageNum }} 页</h3>
+          <button class="btn btn-default btn-small" @click="closeDetailModal">
+            ✕
+          </button>
+        </div>
+        <div class="detail-modal-body">
+          <div v-if="detailModal.loading" class="detail-loading">
+            <div class="spinner large"></div>
+            <p>正在加载页面...</p>
+          </div>
+          <div v-else class="detail-canvas-container">
+            <canvas ref="detailCanvas"></canvas>
+          </div>
+        </div>
+        <div class="detail-modal-footer">
+          <button class="btn btn-default" @click="prevDetailPage" :disabled="detailModal.pageNum <= 1">
+            ← 上一页
+          </button>
+          <span class="page-info">
+            {{ detailModal.pageNum }} / {{ pdfDocument?.pageCount || 0 }}
+          </span>
+          <button class="btn btn-default" @click="nextDetailPage" :disabled="detailModal.pageNum >= (pdfDocument?.pageCount || 0)">
+            下一页 →
+          </button>
+          <button 
+            class="btn btn-primary" 
+            @click="selectAndClose"
+            v-if="selectMode === 'click'"
+          >
+            {{ selectedPages.includes(detailModal.pageNum) ? '取消选择' : '选择此页' }}
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -233,19 +275,25 @@ const getPdfLib = () => {
 }
 
 initPdfJs()
-const isDragOver = ref(false);
-const isExtracting = ref(false);
-const isLoadingThumbnails = ref(false);
-const pdfDocument = ref(null);
-const pdfjsDoc = ref(null);
-const thumbnails = ref([]);
-const canvasRefs = ref([]);
-const selectMode = ref('input');
-const pageRange = ref('');
-const selectedPages = ref([]);
-const thumbnailSize = ref(140);
-const extractionResult = ref(null);
-const thumbnailContainer = ref(null);
+const isDragOver = ref(false)
+const isExtracting = ref(false)
+const isLoadingThumbnails = ref(false)
+const pdfDocument = ref(null)
+const pdfjsDoc = ref(null)
+const thumbnails = ref([])
+const canvasRefs = ref([])
+const selectMode = ref('input')
+const pageRange = ref('')
+const selectedPages = ref([])
+const thumbnailSize = ref(140)
+const extractionResult = ref(null)
+const thumbnailContainer = ref(null)
+const detailCanvas = ref(null)
+const detailModal = ref({
+  show: false,
+  pageNum: 1,
+  loading: false
+})
 const sortedSelectedPages = computed(() => {
  return [...selectedPages.value].sort((a, b) => a - b);
 });
@@ -376,53 +424,127 @@ const loadPdfFromData = async (data, fileName, fileSize) => {
  }
 };
 const renderThumbnail = async (pageIndex) => {
- try {
- const page = await pdfjsDoc.value.getPage(pageIndex + 1);
- const viewport = page.getViewport({ scale: 1 });
- const scale = thumbnailSize.value / viewport.width;
- const scaledViewport = page.getViewport({ scale });
- const canvas = canvasRefs.value[pageIndex];
- if (!canvas) {
- thumbnails.value[pageIndex] = {
- loading: false,
- width: scaledViewport.width,
- height: scaledViewport.height
- };
- return;
- }
- const context = canvas.getContext('2d');
- canvas.width = scaledViewport.width;
- canvas.height = scaledViewport.height;
- thumbnails.value[pageIndex] = {
- loading: false,
- width: scaledViewport.width,
- height: scaledViewport.height
- };
- await page.render({
- canvasContext: context,
- viewport: scaledViewport
- }).promise;
- }
- catch (error) {
- console.error('渲染缩略图失败:', error);
- thumbnails.value[pageIndex] = {
- loading: false,
- width: thumbnailSize.value,
- height: thumbnailSize.value * 1.4
- };
- }
-};
-const togglePageSelection = (pageNum) => {
- if (selectMode.value !== 'click')
- return;
- const index = selectedPages.value.indexOf(pageNum);
- if (index > -1) {
- selectedPages.value.splice(index, 1);
- }
- else {
- selectedPages.value.push(pageNum);
- }
-};
+  try {
+    const page = await pdfjsDoc.value.getPage(pageIndex + 1)
+    const viewport = page.getViewport({ scale: 1 })
+    const scale = thumbnailSize.value / viewport.width
+    const scaledViewport = page.getViewport({ scale })
+
+    const width = scaledViewport.width
+    const height = scaledViewport.height
+
+    await nextTick()
+    const canvas = canvasRefs.value[pageIndex]
+    
+    if (canvas) {
+      const context = canvas.getContext('2d')
+      canvas.width = width
+      canvas.height = height
+      
+      await page.render({
+        canvasContext: context,
+        viewport: scaledViewport
+      }).promise
+    }
+
+    thumbnails.value[pageIndex] = {
+      loading: false,
+      width,
+      height
+    }
+  } catch (error) {
+    console.error('渲染缩略图失败:', error)
+    thumbnails.value[pageIndex] = {
+      loading: false,
+      width: thumbnailSize.value,
+      height: thumbnailSize.value * 1.4
+    }
+  }
+}
+const handleThumbnailClick = (pageNum) => {
+  if (selectMode.value !== 'click') {
+    openDetailModal(pageNum)
+    return
+  }
+  const index = selectedPages.value.indexOf(pageNum)
+  if (index > -1) {
+    selectedPages.value.splice(index, 1)
+  } else {
+    selectedPages.value.push(pageNum)
+  }
+}
+
+const openDetailModal = async (pageNum) => {
+  if (!pdfjsDoc.value) return
+  
+  detailModal.value = {
+    show: true,
+    pageNum,
+    loading: true
+  }
+  
+  await nextTick()
+  await renderDetailPage(pageNum)
+}
+
+const closeDetailModal = () => {
+  detailModal.value.show = false
+}
+
+const renderDetailPage = async (pageNum) => {
+  if (!pdfjsDoc.value || !detailCanvas.value) return
+  
+  try {
+    detailModal.value.loading = true
+    const page = await pdfjsDoc.value.getPage(pageNum)
+    const viewport = page.getViewport({ scale: 1 })
+    
+    const containerWidth = 700
+    const scale = containerWidth / viewport.width
+    const scaledViewport = page.getViewport({ scale })
+    
+    const canvas = detailCanvas.value
+    const context = canvas.getContext('2d')
+    canvas.width = scaledViewport.width
+    canvas.height = scaledViewport.height
+    
+    await page.render({
+      canvasContext: context,
+      viewport: scaledViewport
+    }).promise
+    
+    detailModal.value.loading = false
+  } catch (error) {
+    console.error('渲染详情页失败:', error)
+    detailModal.value.loading = false
+    showToast('渲染页面失败: ' + error.message, 'error')
+  }
+}
+
+const prevDetailPage = async () => {
+  if (detailModal.value.pageNum > 1) {
+    detailModal.value.pageNum--
+    await renderDetailPage(detailModal.value.pageNum)
+  }
+}
+
+const nextDetailPage = async () => {
+  if (detailModal.value.pageNum < pdfDocument.value.pageCount) {
+    detailModal.value.pageNum++
+    await renderDetailPage(detailModal.value.pageNum)
+  }
+}
+
+const selectAndClose = () => {
+  const pageNum = detailModal.value.pageNum
+  const index = selectedPages.value.indexOf(pageNum)
+  if (index > -1) {
+    selectedPages.value.splice(index, 1)
+  } else {
+    selectedPages.value.push(pageNum)
+  }
+  closeDetailModal()
+}
 const clearPdf = () => {
  pdfDocument.value = null;
  pdfjsDoc.value = null;
@@ -956,5 +1078,107 @@ onUnmounted(() => {
 .result-actions {
   display: flex;
   gap: 12px;
+}
+
+.thumbnail-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  aspect-ratio: 1 / 1.4;
+  font-size: 32px;
+  color: var(--text-placeholder);
+  background: var(--bg-color);
+  border-radius: 4px;
+}
+
+.detail-modal {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  animation: fadeIn 0.2s ease;
+}
+
+.detail-modal-content {
+  background: white;
+  border-radius: 12px;
+  max-width: 800px;
+  width: 90%;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
+}
+
+.detail-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 24px;
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+
+.detail-modal-header h3 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-color);
+}
+
+.detail-modal-body {
+  flex: 1;
+  overflow: auto;
+  padding: 20px;
+  background: var(--bg-color);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.detail-canvas-container {
+  background: white;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  border-radius: 4px;
+  padding: 10px;
+}
+
+.detail-canvas-container canvas {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+.detail-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  color: var(--text-secondary);
+}
+
+.detail-modal-footer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 16px 24px;
+  border-top: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+
+.page-info {
+  font-size: 14px;
+  color: var(--text-secondary);
+  min-width: 60px;
+  text-align: center;
 }
 </style>
