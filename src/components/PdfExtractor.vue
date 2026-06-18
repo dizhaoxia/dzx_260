@@ -237,16 +237,16 @@
                 <div class="spinner"></div>
               </div>
               <canvas
-                v-show="!page.loading && page.width > 0"
                 :ref="el => setCanvasRef(el, index)"
-                :width="page.width"
-                :height="page.height"
+                :width="page.width || 100"
+                :height="page.height || 140"
+                :class="{ 'canvas-loading': page.loading }"
                 :style="{
                   width: thumbnailSize + 'px',
                   height: (page.width > 0 ? (thumbnailSize * page.height / page.width) + 'px' : (thumbnailSize * 1.4) + 'px')
                 }"
               ></canvas>
-              <div v-show="!page.loading && page.width === 0" class="thumbnail-placeholder">
+              <div v-if="page.loading" class="thumbnail-placeholder">
                 📄
               </div>
               <div class="page-number">
@@ -343,21 +343,21 @@
 
 <script setup>
 import { ref, computed, onMounted, onUnmounted, inject, nextTick } from 'vue'
-import * as pdfjsLib from 'pdfjs-dist'
+import 'pdfjs-dist/build/pdf.min.js'
+import PdfjsWorker from 'pdfjs-dist/build/pdf.worker.min.js?url'
 import { PDFDocument } from 'pdf-lib'
 
 const showToast = inject('showToast')
 
-const initPdfJs = () => {
-  if (pdfjsLib.GlobalWorkerOptions) {
-    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'
-  } else if (pdfjsLib.default && pdfjsLib.default.GlobalWorkerOptions) {
-    pdfjsLib.default.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'
-  }
+const getPdfLib = () => {
+  return window.pdfjsLib
 }
 
-const getPdfLib = () => {
-  return pdfjsLib.default || pdfjsLib
+const initPdfJs = () => {
+  const lib = getPdfLib()
+  if (lib && lib.GlobalWorkerOptions) {
+    lib.GlobalWorkerOptions.workerSrc = PdfjsWorker
+  }
 }
 
 initPdfJs()
@@ -654,64 +654,80 @@ const loadPdfFromData = async (data, fileName, fileSize, filePath = '') => {
  };
  selectedPages.value = [];
  extractionResult.value = null;
- pdfjsDoc.value = await getPdfLib().getDocument({ data }).promise
+ 
+ const doc = await getPdfLib().getDocument({ data }).promise
+ pdfjsDoc.value = doc;
+ 
  thumbnails.value = [];
  canvasRefs.value = [];
  for (let i = 0; i < pageCount; i++) {
- thumbnails.value.push({
- loading: true,
- width: 0,
- height: 0
- });
+   thumbnails.value.push({
+     loading: true,
+     width: 0,
+     height: 0
+   });
  }
- await nextTick();
+ 
+ const pageSizes = [];
  for (let i = 0; i < pageCount; i++) {
- await renderThumbnail(i);
+   const page = await doc.getPage(i + 1);
+   const viewport = page.getViewport({ scale: 1 });
+   const scale = thumbnailSize.value / viewport.width;
+   const scaledViewport = page.getViewport({ scale });
+   pageSizes.push({
+     width: scaledViewport.width,
+     height: scaledViewport.height
+   });
  }
+ 
+ for (let i = 0; i < pageCount; i++) {
+   thumbnails.value[i] = {
+     loading: false,
+     width: pageSizes[i].width,
+     height: pageSizes[i].height
+   };
+ }
+ 
+ await nextTick();
+ 
+ for (let i = 0; i < pageCount; i++) {
+   await renderThumbnail(i);
+ }
+ 
  isLoadingThumbnails.value = false;
  showToast(`成功加载 ${fileName}，共 ${pageCount} 页`, 'success');
  }
  catch (error) {
+ console.error('加载PDF失败:', error);
  isLoadingThumbnails.value = false;
  showToast('解析PDF失败: ' + error.message, 'error');
  }
 };
 const renderThumbnail = async (pageIndex) => {
   try {
-    const page = await pdfjsDoc.value.getPage(pageIndex + 1)
-    const viewport = page.getViewport({ scale: 1 })
-    const scale = thumbnailSize.value / viewport.width
-    const scaledViewport = page.getViewport({ scale })
-
-    const width = scaledViewport.width
-    const height = scaledViewport.height
-
-    thumbnails.value[pageIndex] = {
-      loading: false,
-      width,
-      height
-    }
-
-    await nextTick()
-    const canvas = canvasRefs.value[pageIndex]
+    if (!pdfjsDoc.value) return;
     
-    if (canvas) {
-      const context = canvas.getContext('2d')
-      canvas.width = width
-      canvas.height = height
-      
-      await page.render({
-        canvasContext: context,
-        viewport: scaledViewport
-      }).promise
-    }
+    const page = await pdfjsDoc.value.getPage(pageIndex + 1);
+    const thumb = thumbnails.value[pageIndex];
+    if (!thumb || thumb.width === 0) return;
+    
+    const canvas = canvasRefs.value[pageIndex];
+    if (!canvas) return;
+    
+    const viewport = page.getViewport({ scale: 1 });
+    const scale = thumbnailSize.value / viewport.width;
+    const scaledViewport = page.getViewport({ scale });
+    
+    const context = canvas.getContext('2d');
+    canvas.width = thumb.width;
+    canvas.height = thumb.height;
+    
+    await page.render({
+      canvasContext: context,
+      viewport: scaledViewport
+    }).promise;
   } catch (error) {
-    console.error('渲染缩略图失败:', error)
-    thumbnails.value[pageIndex] = {
-      loading: false,
-      width: thumbnailSize.value,
-      height: thumbnailSize.value * 1.4
-    }
+    console.error('渲染缩略图失败:', error);
   }
 }
 const handleThumbnailClick = (pageNum) => {
@@ -750,19 +766,17 @@ const renderDetailPage = async (pageNum) => {
   try {
     detailModal.value.loading = true
     
-    await nextTick()
     let canvas = detailCanvas.value
     let tries = 0
-    while (!canvas && tries < 10) {
-      await new Promise(r => setTimeout(r, 50))
+    while (!canvas && tries < 20) {
+      await nextTick()
+      await new Promise(r => setTimeout(r, 30))
       canvas = detailCanvas.value
       tries++
     }
     
     if (!canvas) {
-      console.warn('详情canvas未就绪')
-      detailModal.value.loading = false
-      return
+      throw new Error('Canvas元素未找到')
     }
     
     const page = await pdfjsDoc.value.getPage(pageNum)
@@ -1380,15 +1394,23 @@ onUnmounted(() => {
 }
 
 .thumbnail-placeholder {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 100%;
-  aspect-ratio: 1 / 1.4;
   font-size: 32px;
   color: var(--text-placeholder);
   background: var(--bg-color);
   border-radius: 4px;
+  z-index: 1;
+}
+
+.canvas-loading {
+  visibility: hidden;
 }
 
 .detail-modal {

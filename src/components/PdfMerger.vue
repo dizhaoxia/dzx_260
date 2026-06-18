@@ -60,12 +60,12 @@
                   <div class="spinner small"></div>
                 </div>
                 <canvas
-                  v-show="!item.thumbnailLoading && item.thumbWidth > 0"
+                  :class="{ 'canvas-loading': item.thumbnailLoading }"
                   :ref="el => setThumbnailRef(el, index)"
-                  :width="item.thumbWidth"
-                  :height="item.thumbHeight"
+                  :width="item.thumbWidth || 60"
+                  :height="item.thumbHeight || 84"
                 ></canvas>
-                <div v-show="!item.thumbnailLoading && item.thumbWidth === 0" class="thumb-placeholder">
+                <div v-if="item.thumbnailLoading" class="thumb-placeholder">
                   📄
                 </div>
               </div>
@@ -116,12 +116,12 @@
                     <div class="spinner small"></div>
                   </div>
                   <canvas
-                    v-show="!page.loading && page.width > 0"
+                    :class="{ 'canvas-loading': page.loading }"
                     :ref="el => setPageCanvasRef(el, index)"
-                    :width="page.width"
-                    :height="page.height"
+                    :width="page.width || 100"
+                    :height="page.height || 140"
                   ></canvas>
-                  <div v-show="!page.loading && page.width === 0" class="thumb-placeholder">
+                  <div v-if="page.loading" class="thumb-placeholder">
                     📄
                   </div>
                 </div>
@@ -272,10 +272,10 @@
                   <div class="spinner"></div>
                 </div>
                 <canvas
-                  v-else
+                  :class="{ 'canvas-loading': page.loading }"
                   :ref="el => setPreviewCanvasRef(el, index)"
-                  :width="page.width"
-                  :height="page.height"
+                  :width="page.width || 150"
+                  :height="page.height || 210"
                 ></canvas>
                 <div class="preview-page-number">
                   {{ index + 1 }}
@@ -337,22 +337,22 @@
 
 <script setup>
 import { ref, computed, onMounted, onUnmounted, inject, nextTick, watch } from 'vue'
-import * as pdfjsLib from 'pdfjs-dist'
+import 'pdfjs-dist/build/pdf.min.js'
+import PdfjsWorker from 'pdfjs-dist/build/pdf.worker.min.js?url'
 import { PDFDocument } from 'pdf-lib'
 import Sortable from 'sortablejs'
 
 const showToast = inject('showToast')
 
-const initPdfJs = () => {
-  if (pdfjsLib.GlobalWorkerOptions) {
-    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'
-  } else if (pdfjsLib.default && pdfjsLib.default.GlobalWorkerOptions) {
-    pdfjsLib.default.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'
-  }
+const getPdfLib = () => {
+  return window.pdfjsLib
 }
 
-const getPdfLib = () => {
-  return pdfjsLib.default || pdfjsLib
+const initPdfJs = () => {
+  const lib = getPdfLib()
+  if (lib && lib.GlobalWorkerOptions) {
+    lib.GlobalWorkerOptions.workerSrc = PdfjsWorker
+  }
 }
 
 initPdfJs()
@@ -714,6 +714,10 @@ const loadFileThumbnail = async (fileItem, index) => {
     const width = scaledViewport.width
     const height = scaledViewport.height
 
+    fileItem.thumbWidth = width
+    fileItem.thumbHeight = height
+    fileItem.thumbnailLoading = false
+
     await nextTick()
     const canvas = thumbnailRefs.value[index]
     
@@ -727,10 +731,6 @@ const loadFileThumbnail = async (fileItem, index) => {
         viewport: scaledViewport
       }).promise
     }
-
-    fileItem.thumbWidth = width
-    fileItem.thumbHeight = height
-    fileItem.thumbnailLoading = false
   } catch (error) {
     console.error('加载缩略图失败:', error)
     fileItem.thumbnailLoading = false
@@ -779,23 +779,38 @@ const selectFile = async (fileItem) => {
       fileItem.pdfjsDoc = await getPdfLib().getDocument({ data: fileItem.data }).promise
     }
 
+    const doc = fileItem.pdfjsDoc
     const pageCount = fileItem.pageCount
+    
+    const pageSizes = []
+    for (let i = 0; i < pageCount; i++) {
+      const page = await doc.getPage(i + 1)
+      const viewport = page.getViewport({ scale: 1 })
+      const scale = 150 / viewport.width
+      const scaledViewport = page.getViewport({ scale })
+      pageSizes.push({
+        width: scaledViewport.width,
+        height: scaledViewport.height
+      })
+    }
+    
     for (let i = 0; i < pageCount; i++) {
       selectedFilePages.value.push({
-        loading: true,
-        width: 0,
-        height: 0
+        loading: false,
+        width: pageSizes[i].width,
+        height: pageSizes[i].height
       })
     }
 
     await nextTick()
 
     for (let i = 0; i < pageCount; i++) {
-      await renderPreviewPage(fileItem.pdfjsDoc, i)
+      await renderPreviewPage(doc, i)
     }
 
     isLoadingPreview.value = false
   } catch (error) {
+    console.error('加载预览失败:', error)
     isLoadingPreview.value = false
     showToast('加载预览失败: ' + error.message, 'error')
   }
@@ -804,23 +819,17 @@ const selectFile = async (fileItem) => {
 const renderPreviewPage = async (pdfjsDoc, pageIndex) => {
   try {
     const page = await pdfjsDoc.getPage(pageIndex + 1)
+    const pageData = selectedFilePages.value[pageIndex]
+    
     const viewport = page.getViewport({ scale: 1 })
     const scale = 150 / viewport.width
     const scaledViewport = page.getViewport({ scale })
 
-    selectedFilePages.value[pageIndex] = {
-      loading: false,
-      width: scaledViewport.width,
-      height: scaledViewport.height
-    }
-
-    await nextTick()
-
     const canvas = previewCanvasRefs.value[pageIndex]
     if (canvas) {
       const context = canvas.getContext('2d')
-      canvas.width = scaledViewport.width
-      canvas.height = scaledViewport.height
+      canvas.width = pageData.width
+      canvas.height = pageData.height
       await page.render({
         canvasContext: context,
         viewport: scaledViewport
@@ -828,11 +837,6 @@ const renderPreviewPage = async (pdfjsDoc, pageIndex) => {
     }
   } catch (error) {
     console.error('渲染预览页失败:', error)
-    selectedFilePages.value[pageIndex] = {
-      loading: false,
-      width: 150,
-      height: 210
-    }
   }
 }
 
@@ -1298,8 +1302,26 @@ onUnmounted(() => {
 }
 
 .thumb-placeholder {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   font-size: 24px;
   color: var(--text-placeholder);
+  z-index: 1;
+}
+
+.canvas-loading {
+  visibility: hidden;
+}
+
+.item-thumbnail,
+.page-item-thumb {
+  position: relative;
 }
 
 .item-info {
